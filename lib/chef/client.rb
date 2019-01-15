@@ -260,10 +260,8 @@ class Chef
         enforce_path_sanity
         run_ohai
 
-        generate_guid
-
         register unless Chef::Config[:solo_legacy_mode]
-        register_data_collector_reporter
+        register_reporters
 
         load_node
 
@@ -418,6 +416,7 @@ class Chef
       [
         Chef::ActionCollection.new,
         Chef::ResourceReporter.new(rest_clean),
+        Chef::DataCollector::Reporter.new(events),
         Chef::Audit::AuditReporter.new(rest_clean),
       ].each do |r|
         events.register(r)
@@ -678,7 +677,6 @@ class Chef
                                                             signing_key_filename: config[:client_key])
       # force initialization of the rest_clean API object
       rest_clean(client_name, config)
-      register_reporters
     rescue Exception => e
       # TODO this should probably only ever fire if we *started* registration.
       # Move it to the block above.
@@ -1002,33 +1000,6 @@ class Chef
       require "chef/win32/security"
 
       Chef::ReservedNames::Win32::Security.has_admin_privileges?
-    end
-
-    # Ensure that we have a GUID for this node
-    # If we've got the proper configuration, we'll simply set that.
-    # If we're registed with the data collector, we'll migrate that UUID into our configuration and use that
-    # Otherwise, we'll create a new GUID and save it
-    def generate_guid
-      Chef::Config[:chef_guid] ||=
-        if File.exists?(Chef::Config[:chef_guid_path])
-          File.read(Chef::Config[:chef_guid_path])
-        else
-          uuid = UUIDFetcher.node_uuid
-          File.open(Chef::Config[:chef_guid_path], "w+") do |fh|
-            fh.write(uuid)
-          end
-          uuid
-        end
-    end
-
-    class UUIDFetcher
-      extend Chef::DataCollector::Messages::Helpers
-    end
-
-    # Register the data collector reporter to send event information to the
-    # data collector server
-    def register_data_collector_reporter
-      events.register(Chef::DataCollector::Reporter.new) if Chef::DataCollector.register_reporter?
     end
   end
 end
