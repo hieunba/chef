@@ -1,8 +1,5 @@
 #
-# Author:: Adam Leff (<adamleff@chef.io)
-# Author:: Ryan Cragun (<ryan@chef.io>)
-#
-# Copyright:: Copyright 2012-2018, Chef Software Inc.
+# Copyright:: Copyright 2019-2019, Chef Software Inc.
 # License:: Apache License, Version 2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,593 +15,502 @@
 # limitations under the License.
 #
 
-require "spec_helper"
+require File.expand_path("../../spec_helper", __FILE__)
 require "chef/data_collector"
-require "chef/resource_builder"
+require "socket"
 
 describe Chef::DataCollector do
-
-  describe ".register_reporter?" do
-    context "when no data collector URL or output locations are configured" do
-      it "returns false" do
-        Chef::Config[:data_collector][:server_url] = nil
-        Chef::Config[:data_collector][:output_locations] = nil
-        expect(Chef::DataCollector.register_reporter?).to be_falsey
-      end
-    end
-
-    context "when a data collector URL is configured" do
-      before do
-        Chef::Config[:data_collector][:server_url] = "http://data_collector"
-      end
-
-      context "when operating in why_run mode" do
-        it "returns false" do
-          Chef::Config[:why_run] = true
-          expect(Chef::DataCollector.register_reporter?).to be_falsey
-        end
-      end
-
-      context "when not operating in why_run mode" do
-
-        before do
-          Chef::Config[:why_run] = false
-          Chef::Config[:data_collector][:token] = token
-        end
-
-        context "when a token is configured" do
-
-          let(:token) { "supersecrettoken" }
-
-          context "when report is enabled for current mode" do
-            it "returns true" do
-              allow(Chef::DataCollector).to receive(:reporter_enabled_for_current_mode?).and_return(true)
-              expect(Chef::DataCollector.register_reporter?).to be_truthy
-            end
-          end
-
-          context "when report is disabled for current mode" do
-            it "returns false" do
-              allow(Chef::DataCollector).to receive(:reporter_enabled_for_current_mode?).and_return(false)
-              expect(Chef::DataCollector.register_reporter?).to be_falsey
-            end
-          end
-
-        end
-
-        # `Chef::Config[:data_collector][:server_url]` defaults to a URL
-        # relative to the `chef_server_url`, so we use configuration of the
-        # token to infer whether a solo/local mode user intends for data
-        # collection to be enabled.
-        context "when a token is not configured" do
-
-          let(:token) { nil }
-
-          context "when report is enabled for current mode" do
-
-            before do
-              allow(Chef::DataCollector).to receive(:reporter_enabled_for_current_mode?).and_return(true)
-            end
-
-            context "when the current mode is solo" do
-
-              before do
-                Chef::Config[:solo] = true
-              end
-
-              it "returns true" do
-                expect(Chef::DataCollector.register_reporter?).to be(true)
-              end
-
-            end
-
-            context "when the current mode is local mode" do
-
-              before do
-                Chef::Config[:local_mode] = true
-              end
-
-              it "returns false" do
-                expect(Chef::DataCollector.register_reporter?).to be(true)
-              end
-            end
-
-            context "when the current mode is client mode" do
-
-              before do
-                Chef::Config[:local_mode] = false
-                Chef::Config[:solo] = false
-              end
-
-              it "returns true" do
-                expect(Chef::DataCollector.register_reporter?).to be_truthy
-              end
-
-            end
-
-          end
-
-          context "when report is disabled for current mode" do
-            it "returns false" do
-              allow(Chef::DataCollector).to receive(:reporter_enabled_for_current_mode?).and_return(false)
-              expect(Chef::DataCollector.register_reporter?).to be_falsey
-            end
-          end
-
-        end
-
-      end
-    end
-
-    context "when output_locations are configured" do
-      before do
-        Chef::Config[:data_collector][:output_locations] = ["http://data_collector", "/tmp/data_collector.json"]
-      end
-
-      context "when operating in why_run mode" do
-        it "returns false" do
-          Chef::Config[:why_run] = true
-          expect(Chef::DataCollector.register_reporter?).to be_falsey
-        end
-      end
-
-      context "when not operating in why_run mode" do
-
-        before do
-          Chef::Config[:why_run] = false
-          Chef::Config[:data_collector][:token] = token
-        end
-
-        context "when a token is configured" do
-
-          let(:token) { "supersecrettoken" }
-
-          context "when report is enabled for current mode" do
-            it "returns true" do
-              allow(Chef::DataCollector).to receive(:reporter_enabled_for_current_mode?).and_return(true)
-              expect(Chef::DataCollector.register_reporter?).to be_truthy
-            end
-          end
-
-          context "when report is disabled for current mode" do
-            it "returns false" do
-              allow(Chef::DataCollector).to receive(:reporter_enabled_for_current_mode?).and_return(false)
-              expect(Chef::DataCollector.register_reporter?).to be_falsey
-            end
-          end
-
-        end
-
-        # `Chef::Config[:data_collector][:server_url]` defaults to a URL
-        # relative to the `chef_server_url`, so we use configuration of the
-        # token to infer whether a solo/local mode user intends for data
-        # collection to be enabled.
-        context "when a token is not configured" do
-
-          let(:token) { nil }
-
-          context "when report is enabled for current mode" do
-
-            before do
-              allow(Chef::DataCollector).to receive(:reporter_enabled_for_current_mode?).and_return(true)
-            end
-
-            context "when the current mode is solo" do
-
-              before do
-                Chef::Config[:solo] = true
-              end
-
-              it "returns true" do
-                expect(Chef::DataCollector.register_reporter?).to be(true)
-              end
-
-            end
-
-            context "when the current mode is local mode" do
-
-              before do
-                Chef::Config[:local_mode] = true
-              end
-
-              it "returns false" do
-                expect(Chef::DataCollector.register_reporter?).to be(true)
-              end
-            end
-
-            context "when the current mode is client mode" do
-
-              before do
-                Chef::Config[:local_mode] = false
-                Chef::Config[:solo] = false
-              end
-
-              it "returns true" do
-                expect(Chef::DataCollector.register_reporter?).to be_truthy
-              end
-
-            end
-
-          end
-
-          context "when report is disabled for current mode" do
-            it "returns false" do
-              allow(Chef::DataCollector).to receive(:reporter_enabled_for_current_mode?).and_return(false)
-              expect(Chef::DataCollector.register_reporter?).to be_falsey
-            end
-          end
-
-        end
-
-      end
-    end
+  before(:each) do
+    Chef::Config[:enable_reporting] = true
   end
 
-  describe ".reporter_enabled_for_current_mode?" do
-    context "when running in solo mode" do
-      before do
-        Chef::Config[:solo] = true
-        Chef::Config[:local_mode] = false
-      end
+  let(:node) { Chef::Node.new }
 
-      context "when data_collector_mode is :solo" do
-        it "returns true" do
-          Chef::Config[:data_collector][:mode] = :solo
-          expect(Chef::DataCollector.reporter_enabled_for_current_mode?).to eq(true)
-        end
-      end
+  let(:rest_client) { double("Chef::ServerAPI (mock)") }
 
-      context "when data_collector_mode is :client" do
-        it "returns false" do
-          Chef::Config[:data_collector][:mode] = :client
-          expect(Chef::DataCollector.reporter_enabled_for_current_mode?).to eq(false)
-        end
-      end
+  let(:data_collector) { Chef::DataCollector::Reporter.new }
 
-      context "when data_collector_mode is :both" do
-        it "returns true" do
-          Chef::Config[:data_collector][:mode] = :both
-          expect(Chef::DataCollector.reporter_enabled_for_current_mode?).to eq(true)
-        end
-      end
-    end
+  let(:new_resource) { Chef::Resource::File.new("/tmp/a-file.txt") }
 
-    context "when running in local mode" do
-      before do
-        Chef::Config[:solo] = false
-        Chef::Config[:local_mode] = true
-      end
+  let(:current_resource) { Chef::Resource::File.new("/tmp/a-file.txt") }
 
-      context "when data_collector_mode is :solo" do
-        it "returns true" do
-          Chef::Config[:data_collector][:mode] = :solo
-          expect(Chef::DataCollector.reporter_enabled_for_current_mode?).to eq(true)
-        end
-      end
+  let(:events) { Chef::EventDispatch::Dispatcher.new }
 
-      context "when data_collector_mode is :client" do
-        it "returns false" do
-          Chef::Config[:data_collector][:mode] = :client
-          expect(Chef::DataCollector.reporter_enabled_for_current_mode?).to eq(false)
-        end
-      end
+  let(:run_context) { Chef::RunContext.new(node, {}, events) }
 
-      context "when data_collector_mode is :both" do
-        it "returns true" do
-          Chef::Config[:data_collector][:mode] = :both
-          expect(Chef::DataCollector.reporter_enabled_for_current_mode?).to eq(true)
-        end
-      end
-    end
+  let(:run_status) { Chef::RunStatus.new(node, events) }
 
-    context "when running in client mode" do
-      before do
-        Chef::Config[:solo] = false
-        Chef::Config[:local_mode] = false
-      end
+  let(:start_time) { Time.new }
 
-      context "when data_collector_mode is :solo" do
-        it "returns false" do
-          Chef::Config[:data_collector][:mode] = :solo
-          expect(Chef::DataCollector.reporter_enabled_for_current_mode?).to eq(false)
-        end
-      end
+  let(:end_time) { Time.new + 20 }
 
-      context "when data_collector_mode is :client" do
-        it "returns true" do
-          Chef::Config[:data_collector][:mode] = :client
-          expect(Chef::DataCollector.reporter_enabled_for_current_mode?).to eq(true)
-        end
-      end
+  let(:run_list) { Chef::RunList.new }
 
-      context "when data_collector_mode is :both" do
-        it "returns true" do
-          Chef::Config[:data_collector][:mode] = :both
-          expect(Chef::DataCollector.reporter_enabled_for_current_mode?).to eq(true)
-        end
-      end
-    end
-  end
+  let(:run_id) { run_status.run_id }
 
-end
+  let(:expansion) { Chef::RunList::RunListExpansion.new("_default", run_list.run_list_items) }
 
-describe Chef::DataCollector::Reporter do
-  let(:reporter) { described_class.new }
-  let(:run_status) { Chef::RunStatus.new(Chef::Node.new, Chef::EventDispatch::Dispatcher.new) }
+  let(:cookbook_name) { "monkey" }
 
-  let(:token) { "supersecrettoken" }
+  let(:recipe_name) { "atlas" }
+
+  let(:node_name) { "spitfire" }
+
+  let(:cookbook_version) { double("Cookbook::Version", version: "1.2.3") }
+
+  let(:resource_record) { [] }
+
+  let(:exception) { nil }
+
+  #  let(:action_collection) { Chef::ActionCollection.new }
 
   before do
-    Chef::Config[:data_collector][:server_url] = "http://my-data-collector-server.mycompany.com"
-    Chef::Config[:data_collector][:token] = token
+    allow(Chef::HTTP::SimpleJSON).to receive(:new).and_return(rest_client)
+    allow(Chef::ServerAPI).to receive(:new).and_return(rest_client)
+    node.name(node_name)
+    new_resource.cookbook_name = cookbook_name
+    new_resource.recipe_name = recipe_name
+    allow(new_resource).to receive(:cookbook_version).and_return(cookbook_version)
+    run_list << "recipe[lobster]" << "role[rage]" << "recipe[fist]"
+    allow(Time).to receive(:now).and_return(start_time, end_time)
+    # events.register(action_collection)
+    events.register(data_collector)
   end
 
-  describe "selecting token or signed header authentication" do
+  def expect_start_message
+    expect(rest_client).to receive(:post).with(
+      nil,
+      {
+        "chef_server_fqdn" => "localhost",
+        "entity_uuid" => "335990f4-2c7e-47c2-89a5-407d0891463e",
+        "id" => nil,
+        "message_type" => "run_start",
+        "message_version" => "1.0.0",
+        "node_name" => node_name,
+        "organization_name" => "unknown_organization",
+        "run_id" => run_status.run_id,
+        "source" => "chef_client",
+        "start_time" => run_status&.start_time&.utc&.iso8601,
+      },
+      { "Content-Type" => "application/json" }
+    )
+  end
 
-    context "when the token is set in the config" do
+  def expect_converge_message(keys)
+    keys["message_type"] = "run_converge"
+    keys["message_version"] = "1.1.0"
+    expect(rest_client).to receive(:post).with(
+      nil,
+      hash_including(keys),
+      { "Content-Type" => "application/json" }
+    )
+  end
 
-      before do
-        Chef::Config[:client_key] = "/no/key/should/exist/at/this/path.pem"
-      end
+  def resource_has_diff(new_resource, status)
+    new_resource.respond_to?(:diff) && %w{updated failed}.include?(status)
+  end
 
-      it "configures an HTTP client that doesn't do signed header auth" do
-        # Initializing with the wrong kind of HTTP class should cause Chef::Exceptions::PrivateKeyMissing
-        expect { reporter.http }.to_not raise_error
-      end
+  def resource_record_for(current_resource, new_resource, action, status)
+    {
+      "after" => new_resource.state_for_resource_reporter,
+      "before" => current_resource&.state_for_resource_reporter,
+      "cookbook_name" => cookbook_name,
+      "cookbook_version" => cookbook_version.version,
+      "delta" => resource_has_diff(new_resource, status) ? new_resource.diff : "",
+      "duration" => (new_resource.elapsed_time.nil? ? nil : ( new_resource.elapsed_time * 1000 ).to_i).to_s,
+      "id" => new_resource.identity,
+      "ignore_failure" => new_resource.ignore_failure,
+      "name" => new_resource.name,
+      "recipe_name" => recipe_name,
+      "result" => action.to_s,
+      "status" => status,
+      "type" => new_resource.resource_name.to_sym,
+    }
+  end
 
-    end
+  describe "when the start of the run fails" do
+    let(:exception) { Exception.new("imperial to metric conversion error") }
 
-    context "when no token is set in the config" do
-
-      let(:token) { nil }
-
-      let(:client_key) { File.join(CHEF_SPEC_DATA, "ssl", "private_key.pem") }
-
-      before do
-        Chef::Config[:client_key] = client_key
-      end
-
-      it "configures an HTTP client that does signed header auth" do
-        expect { reporter.http }.to_not raise_error
-        expect(reporter.http.options).to have_key(:signing_key_filename)
-        expect(reporter.http.options[:signing_key_filename]).to eq(client_key)
-      end
+    it "should report failure when the run list expansion fails" do
+      # this never starts the clock or calls run_started
+      raise "FIXME"
+  #    expect_start_message
+  #    expect_converge_message("chef_server_fqdn"=>"localhost")
+      # events.run_list_expand_failed(node, exception)
+      # events.run_failed(exception, run_status)
     end
 
   end
 
-  describe "#run_started" do
+  describe "after successfully starting the run" do
     before do
-      allow(reporter).to receive(:update_run_status)
-      allow(reporter).to receive(:send_to_data_collector)
-      allow(Chef::DataCollector::Messages).to receive(:run_start_message)
+      events.run_list_expanded(expansion)
+      run_status.start_clock
+      # events.cookbook_compilation_start(run_context)
     end
 
-    it "updates the run status" do
-      expect(reporter).to receive(:update_run_status).with(run_status)
-      reporter.run_started(run_status)
-    end
+    describe "initialization" do
+      it "the default :server_url is based on the :chef_server_url" do
+        # i had no idea there was a default :chef_server_url
+        expect(Chef::Config[:chef_server_url]).to eql("https://localhost:443")
+        expect(Chef::Config[:data_collector][:server_url]).to eql("https://localhost:443/data-collector")
+      end
 
-    it "sends the RunStart message output to the Data Collector server" do
-      expect(Chef::DataCollector::Messages)
-        .to receive(:run_start_message)
-        .with(run_status)
-        .and_return(key: "value")
-      expect(reporter).to receive(:send_to_data_collector).with({ key: "value" })
-      reporter.run_started(run_status)
-    end
-  end
-
-  describe "when sending a message at chef run completion" do
-
-    let(:node) { Chef::Node.new }
-
-    let(:run_status) do
-      instance_double("Chef::RunStatus",
-                      run_id: "run_id",
-                      node: node,
-                      start_time: Time.new,
-                      end_time: Time.new,
-                      exception: exception)
-    end
-
-    before do
-      reporter.send(:update_run_status, run_status)
-    end
-
-    describe "#run_completed" do
-
-      let(:exception) { nil }
-
-      it "sends the run completion" do
-        expect(reporter).to receive(:send_to_data_collector) do |message|
-          expect(message).to be_a(Hash)
-          expect(message["status"]).to eq("success")
-        end
-        reporter.run_completed(node)
+      it "the default :output_locations is nil" do
+        expect(Chef::Config[:data_collector][:output_locations]).to be nil
       end
     end
 
-    describe "#run_failed" do
-
-      let(:exception) { StandardError.new("oops") }
-
-      it "updates the exception and sends the run completion" do
-        expect(reporter).to receive(:send_to_data_collector) do |message|
-          expect(message).to be_a(Hash)
-          expect(message["status"]).to eq("failure")
-        end
-        reporter.run_failed("test_exception")
-      end
-    end
-  end
-
-  describe "#run_list_expanded" do
-    it "sets the expanded run list" do
-      reporter.run_list_expanded("test_run_list")
-      expect(reporter.expanded_run_list).to eq("test_run_list")
-    end
-  end
-
-  describe "#run_list_expand_failed" do
-    let(:node)         { double("node") }
-    let(:error_mapper) { double("error_mapper") }
-    let(:exception)    { double("exception") }
-
-    it "updates the error description" do
-      expect(Chef::Formatters::ErrorMapper).to receive(:run_list_expand_failed).with(
-        node,
-        exception
-      ).and_return(error_mapper)
-      expect(error_mapper).to receive(:for_json).and_return("error_description")
-      expect(reporter).to receive(:update_error_description).with("error_description")
-      reporter.run_list_expand_failed(node, exception)
-    end
-  end
-
-  describe "#cookbook_resolution_failed" do
-    let(:error_mapper)      { double("error_mapper") }
-    let(:exception)         { double("exception") }
-    let(:expanded_run_list) { double("expanded_run_list") }
-
-    it "updates the error description" do
-      expect(Chef::Formatters::ErrorMapper).to receive(:cookbook_resolution_failed).with(
-        expanded_run_list,
-        exception
-      ).and_return(error_mapper)
-      expect(error_mapper).to receive(:for_json).and_return("error_description")
-      expect(reporter).to receive(:update_error_description).with("error_description")
-      reporter.cookbook_resolution_failed(expanded_run_list, exception)
-    end
-
-  end
-
-  describe "#cookbook_sync_failed" do
-    let(:cookbooks)    { double("cookbooks") }
-    let(:error_mapper) { double("error_mapper") }
-    let(:exception)    { double("exception") }
-
-    it "updates the error description" do
-      expect(Chef::Formatters::ErrorMapper).to receive(:cookbook_sync_failed).with(
-        cookbooks,
-        exception
-      ).and_return(error_mapper)
-      expect(error_mapper).to receive(:for_json).and_return("error_description")
-      expect(reporter).to receive(:update_error_description).with("error_description")
-      reporter.cookbook_sync_failed(cookbooks, exception)
-    end
-  end
-
-  describe "#disable_reporter_on_error" do
-    context "when no exception is raise by the block" do
-      it "does not disable the reporter" do
-        expect(reporter).not_to receive(:disable_data_collector_reporter)
-        reporter.send(:disable_reporter_on_error) { true }
+    describe "run_start_message" do
+      it "does it" do
+        expect_start_message
+        events.run_started(run_status)
       end
 
-      it "does not raise an exception" do
-        expect { reporter.send(:disable_reporter_on_error) { true } }.not_to raise_error
+      it "if there is no server_url or output_location it does not send a message" do
+        Chef::Config[:data_collector][:server_url] = nil
+        Chef::Config[:data_collector][:output_locations] = nil
+        expect(rest_client).not_to receive(:post)
+        events.run_started(run_status)
+      end
+
+      it "in why-run mode it does not send a message" do
+        Chef::Config[:why_run] = true
+        expect(rest_client).not_to receive(:post)
+        events.run_started(run_status)
       end
     end
 
-    context "when an unexpected exception is raised by the block" do
-      it "re-raises the exception" do
-        expect { reporter.send(:disable_reporter_on_error) { raise "bummer" } }.to raise_error(RuntimeError)
+    describe "converge messages" do
+      before do
+        expect_start_message
+        events.run_started(run_status)
+        events.converge_start(run_context)
       end
-    end
 
-    [ Timeout::Error, Errno::EINVAL, Errno::ECONNRESET,
-      Errno::ECONNREFUSED, EOFError, Net::HTTPBadResponse,
-      Net::HTTPHeaderSyntaxError, Net::ProtocolError, OpenSSL::SSL::SSLError,
-      Errno::EHOSTDOWN ].each do |exception_class|
-      context "when the block raises a #{exception_class} exception" do
-        it "disables the reporter" do
-          expect(reporter).to receive(:disable_data_collector_reporter)
-          reporter.send(:disable_reporter_on_error) { raise exception_class.new("bummer") }
+      def send_run_failed_or_completed_event
+        status == "success" ? events.run_completed(node) : events.run_failed(exception, run_status)
+      end
+
+      shared_examples_for "sends a converge message" do
+        it "has a chef_server_fqdn" do
+          expect_converge_message("chef_server_fqdn" => "localhost") # FIXME?
+          send_run_failed_or_completed_event
         end
 
-        context "when raise-on-failure is enabled" do
-          it "logs an error and raises" do
-            Chef::Config[:data_collector][:raise_on_failure] = true
-            expect(Chef::Log).to receive(:error)
-            expect { reporter.send(:disable_reporter_on_error) { raise exception_class.new("bummer") } }.to raise_error(exception_class)
+        it "has a start_time" do
+          expect_converge_message("start_time" => run_status.start_time.utc.iso8601)
+          send_run_failed_or_completed_event
+        end
+
+        it "has a end_time" do
+          expect_converge_message("end_time" => run_status.end_time.utc.iso8601)
+          send_run_failed_or_completed_event
+        end
+
+        it "has a entity_uuid" do
+          expect_converge_message("entity_uuid" => "335990f4-2c7e-47c2-89a5-407d0891463e") # FIXME
+          send_run_failed_or_completed_event
+        end
+
+        it "has a expanded_run_list" do
+          expect_converge_message("expanded_run_list" => expansion)
+          send_run_failed_or_completed_event
+        end
+
+        it "has a node" do
+          expect_converge_message("node" => node)
+          send_run_failed_or_completed_event
+        end
+
+        it "has a node_name" do
+          expect_converge_message("node_name" => "spitfire")
+          send_run_failed_or_completed_event
+        end
+
+        it "has an organization" do
+          expect_converge_message("organization_name" => "unknown_organization") # FIXME?
+          send_run_failed_or_completed_event
+        end
+
+        it "has a policy_group" do
+          expect_converge_message("policy_group" => nil) # FIXME?
+          send_run_failed_or_completed_event
+        end
+
+        it "has a policy_name" do
+          expect_converge_message("policy_name" => nil) # FIXME?
+          send_run_failed_or_completed_event
+        end
+
+        it "has a run_id" do
+          expect_converge_message("run_id" => nil) # FIXME
+          send_run_failed_or_completed_event
+        end
+
+        it "has a run_list" do
+          expect_converge_message("run_list" => []) # FIXME
+          send_run_failed_or_completed_event
+        end
+
+        it "has a source" do
+          expect_converge_message("source" => "chef_client") # FIXME
+          send_run_failed_or_completed_event
+        end
+
+        it "has a status" do
+          expect_converge_message("status" => status)
+          send_run_failed_or_completed_event
+        end
+
+        it "has no deprecations" do # FIXME
+          expect_converge_message("deprecations" => [])
+          send_run_failed_or_completed_event
+        end
+
+        it "has an error field" do
+          if exception
+            expect_converge_message(
+              "error" => {
+                "class" => exception.class,
+                "message" => exception.message,
+                "backtrace" => exception.backtrace,
+                "description" => error_description,
+              }
+            )
+          else
+            expect(rest_client).to receive(:post).with(
+              nil,
+              hash_excluding("error"),
+              { "Content-Type" => "application/json" }
+            )
           end
+          send_run_failed_or_completed_event
         end
 
-        context "when raise-on-failure is disabled" do
-          it "logs an info message and does not raise an exception" do
-            Chef::Config[:data_collector][:raise_on_failure] = false
-            expect(Chef::Log).to receive(:info)
-            expect { reporter.send(:disable_reporter_on_error) { raise exception_class.new("bummer") } }.not_to raise_error
-          end
+        it "has a total resource count of zero" do
+          expect_converge_message("total_resource_count" => total_resource_count)
+          send_run_failed_or_completed_event
         end
-      end
-    end
-  end
 
-  describe "#validate_data_collector_server_url!" do
-    context "when server_url is empty" do
-      it "raises an exception" do
-        Chef::Config[:data_collector][:server_url] = ""
-        expect { reporter.send(:validate_data_collector_server_url!) }.to raise_error(Chef::Exceptions::ConfigurationError)
-      end
-    end
+        it "has a updated resource count of zero" do
+          expect_converge_message("updated_resource_count" => updated_resource_count)
+          send_run_failed_or_completed_event
+        end
 
-    context "when server_url is omitted but output_locations is specified" do
-      it "does not an exception" do
-        Chef::Config[:data_collector][:output_locations] = ["http://data_collector", "/tmp/data_collector.json"]
-        expect { reporter.send(:validate_data_collector_server_url!) }.not_to raise_error(Chef::Exceptions::ConfigurationError)
-      end
-    end
-
-    context "when server_url is not empty" do
-      context "when server_url is an invalid URI" do
-        it "raises an exception" do
-          Chef::Config[:data_collector][:server_url] = "this is not a URI"
-          expect { reporter.send(:validate_data_collector_server_url!) }.to raise_error(Chef::Exceptions::ConfigurationError)
+        it "includes the resource record" do
+          expect_converge_message("resources" => resource_record)
+          send_run_failed_or_completed_event
         end
       end
 
-      context "when server_url is a valid URI" do
-        context "when server_url is a URI with no host" do
-          it "raises an exception" do
-            Chef::Config[:data_collector][:server_url] = "/file/uri.txt"
-            expect { reporter.send(:validate_data_collector_server_url!) }.to raise_error(Chef::Exceptions::ConfigurationError)
-          end
+      context "when the run contains a file resource that is up-to-date" do
+        let(:total_resource_count) { 1 }
+        let(:updated_resource_count) { 0 }
+        let(:resource_record) { [ resource_record_for(current_resource, new_resource, :create, "up-to-date") ] }
+        let(:status) { "success" }
 
+        before do
+          events.resource_action_start(new_resource, :create)
+          events.resource_current_state_loaded(new_resource, :create, current_resource)
+          events.resource_up_to_date(new_resource, :create)
+          events.resource_completed(new_resource)
+          events.converge_complete
+          run_status.stop_clock
         end
 
-        context "when server_url is a URI with a valid host" do
-          it "does not an exception" do
-            Chef::Config[:data_collector][:server_url] = "http://www.google.com/data-collector"
-            expect { reporter.send(:validate_data_collector_server_url!) }.not_to raise_error
-          end
+        it_behaves_like "sends a converge message"
+      end
+
+      context "when the run contains a file resource that is updated" do
+        let(:total_resource_count) { 1 }
+        let(:updated_resource_count) { 1 }
+        let(:resource_record) { [ resource_record_for(current_resource, new_resource, :create, "updated") ] }
+        let(:status) { "success" }
+
+        before do
+          events.resource_action_start(new_resource, :create)
+          events.resource_current_state_loaded(new_resource, :create, current_resource)
+          events.resource_updated(new_resource, :create)
+          events.resource_completed(new_resource)
+          events.converge_complete
+          run_status.stop_clock
         end
-      end
-    end
-  end
 
-  describe "#validate_data_collector_output_locations!" do
-    context "when output_locations is empty" do
-      it "raises an exception" do
-        Chef::Config[:data_collector][:output_locations] = {}
-        expect { reporter.send(:validate_data_collector_output_locations!) }.to raise_error(Chef::Exceptions::ConfigurationError)
+        it_behaves_like "sends a converge message"
       end
-    end
 
-    context "when valid output_locations are provided" do
-      it "does not raise an exception" do
-        expect(reporter).to receive(:open).with("data_collection.json", "a")
-        Chef::Config[:data_collector][:output_locations] = { urls: ["http://data_collector"], files: ["data_collection.json"] }
-        expect { reporter.send(:validate_data_collector_output_locations!) }.not_to raise_error(Chef::Exceptions::ConfigurationError)
-      end
-    end
+      context "when the run contains a file resource that is skipped due to a block conditional" do
+        let(:total_resource_count) { 1 }
+        let(:updated_resource_count) { 0 }
+        let(:resource_record) do
+          rec = resource_record_for(current_resource, new_resource, :create, "skipped")
+          rec["conditional"] = "not_if { #code block }" # FIXME: "#code block" is poor, is there some way to fix this?
+          [ rec ]
+        end
+        let(:status) { "success" }
 
-    context "when output_locations contains an invalid URI" do
-      it "raises an exception" do
-        Chef::Config[:data_collector][:output_locations] = { urls: ["this is not a url"], files: ["/tmp/data_collection.json"] }
-        expect { reporter.send(:validate_data_collector_output_locations!) }.to raise_error(Chef::Exceptions::ConfigurationError)
+        before do
+          conditional = (new_resource.not_if { true }).first
+          events.resource_action_start(new_resource, :create)
+          events.resource_current_state_loaded(new_resource, :create, current_resource)
+          events.resource_skipped(new_resource, :create, conditional)
+          events.resource_completed(new_resource)
+          events.converge_complete
+          run_status.stop_clock
+        end
+
+        it_behaves_like "sends a converge message"
       end
+
+      context "when the run contains a file resource that is skipped due to a string conditional" do
+        let(:total_resource_count) { 1 }
+        let(:updated_resource_count) { 0 }
+        let(:resource_record) do
+          rec = resource_record_for(current_resource, new_resource, :create, "skipped")
+          rec["conditional"] = 'not_if "true"'
+          [ rec ]
+        end
+        let(:status) { "success" }
+
+        before do
+          conditional = (new_resource.not_if "true").first
+          events.resource_action_start(new_resource, :create)
+          events.resource_current_state_loaded(new_resource, :create, current_resource)
+          events.resource_skipped(new_resource, :create, conditional)
+          events.resource_completed(new_resource)
+          events.converge_complete
+          run_status.stop_clock
+        end
+
+        it_behaves_like "sends a converge message"
+      end
+
+      context "when the run contains a file resource that threw an exception" do
+        let(:exception) { Exception.new("imperial to metric conversion error") }
+        let(:error_description) { Chef::Formatters::ErrorMapper.resource_failed(new_resource, :create, exception).for_json }
+        let(:total_resource_count) { 1 }
+        let(:updated_resource_count) { 0 }
+        let(:resource_record) do
+          rec = resource_record_for(current_resource, new_resource, :create, "failed")
+          rec["before"] = {} # FIXME: this seems buggy since we have a loaded current_resource
+          rec["error_message"] = "imperial to metric conversion error"
+          [ rec ]
+        end
+        let(:status) { "failure" }
+
+        before do
+          exception.set_backtrace(caller)
+          events.resource_action_start(new_resource, :create)
+          events.resource_current_state_loaded(new_resource, :create, current_resource)
+          events.resource_failed(new_resource, :create, exception)
+          events.resource_completed(new_resource)
+          events.converge_complete
+          run_status.stop_clock
+          run_status.exception = exception
+        end
+
+        it_behaves_like "sends a converge message"
+      end
+
+      context "when the run contains a file resource that threw an exception in load_current_resource" do
+        let(:exception) { Exception.new("imperial to metric conversion error") }
+        let(:error_description) { Chef::Formatters::ErrorMapper.resource_failed(new_resource, :create, exception).for_json }
+        let(:total_resource_count) { 1 }
+        let(:updated_resource_count) { 0 }
+        let(:resource_record) do
+          rec = resource_record_for(current_resource, new_resource, :create, "failed")
+          rec["before"] = {} # FIXME: this seems buggy since we have a loaded current_resource
+          rec["error_message"] = "imperial to metric conversion error"
+          [ rec ]
+        end
+        let(:status) { "failure" }
+
+        before do
+          exception.set_backtrace(caller)
+          events.resource_action_start(new_resource, :create)
+          # resource_current_state_loaded is skipped
+          events.resource_failed(new_resource, :create, exception)
+          events.resource_completed(new_resource)
+          events.converge_failed(exception)
+          run_status.stop_clock
+          run_status.exception = exception
+        end
+
+        it_behaves_like "sends a converge message"
+      end
+
+      context "when the resource collection contains a resource that was skipped due to prior errors" do
+        let(:exception) { Exception.new("imperial to metric conversion error") }
+        let(:error_description) { Chef::Formatters::ErrorMapper.resource_failed(new_resource, :create, exception).for_json }
+        let(:total_resource_count) { 2 }
+        let(:updated_resource_count) { 0 }
+        let(:unprocessed_resource) do
+          res = Chef::Resource::Service.new("unprocessed service")
+          res.cookbook_name = cookbook_name
+          res.recipe_name = recipe_name
+          allow(res).to receive(:cookbook_version).and_return(cookbook_version)
+          res
+        end
+        let(:resource_record) do
+          rec1 = resource_record_for(current_resource, new_resource, :create, "failed")
+          rec1["before"] = {} # FIXME: this seems buggy since we have a loaded current_resource
+          rec1["error_message"] = "imperial to metric conversion error"
+          rec2 = resource_record_for(nil, unprocessed_resource, :nothing, "unprocessed")
+          rec2["before"] = {}
+          rec2["duration"] = "" # FIXME?: resource_completed() never called so DC does not use the elapsed_time, so we get an empty string
+          [ rec1, rec2 ]
+        end
+        let(:status) { "failure" }
+
+        before do
+          run_context.resource_collection << new_resource
+          run_context.resource_collection << unprocessed_resource
+          exception.set_backtrace(caller)
+          events.resource_action_start(new_resource, :create)
+          events.resource_current_state_loaded(new_resource, :create, current_resource)
+          events.resource_failed(new_resource, :create, exception)
+          events.resource_completed(new_resource)
+          events.converge_failed(exception)
+          run_status.stop_clock
+          run_status.exception = exception
+        end
+
+        it_behaves_like "sends a converge message"
+      end
+
+      context "when cookbook resolution fails" do
+        let(:exception) { Exception.new("imperial to metric conversion error") }
+        let(:error_description) { Chef::Formatters::ErrorMapper.cookbook_resolution_failed(expansion, exception).for_json }
+        let(:total_resource_count) { 0 }
+        let(:updated_resource_count) { 0 }
+        let(:status) { "failure" }
+
+        before do
+          events.cookbook_resolution_failed(expansion, exception)
+          run_status.stop_clock
+          run_status.exception = exception
+        end
+
+        it_behaves_like "sends a converge message"
+      end
+
+      context "When cookbook synchronization fails" do
+        let(:exception) { Exception.new("imperial to metric conversion error") }
+        let(:error_description) { Chef::Formatters::ErrorMapper.cookbook_sync_failed({}, exception).for_json }
+        let(:total_resource_count) { 0 }
+        let(:updated_resource_count) { 0 }
+        let(:status) { "failure" }
+
+        before do
+          events.cookbook_sync_failed(expansion, exception)
+          run_status.stop_clock
+          run_status.exception = exception
+        end
+
+        it_behaves_like "sends a converge message"
+      end
+
     end
   end
 end
