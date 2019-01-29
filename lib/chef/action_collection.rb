@@ -1,5 +1,5 @@
 #
-# Copyright:: Copyright 2018-2018, Chef Software Inc.
+# Copyright:: Copyright 2018-2019, Chef Software Inc.
 # License:: Apache License, Version 2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -76,7 +76,7 @@ class Chef
       end
     end
 
-    attr_reader :updated_resources
+    attr_reader :updated_resources # FIXME: rename "action_records"
     attr_reader :total_res_count
     attr_reader :pending_updates
     attr_reader :pending_update
@@ -163,6 +163,7 @@ class Chef
     def resource_skipped(resource, action, conditional)
       return if consumers.empty?
       current_record.status = :skipped
+      current_record.conditional = conditional
       @total_res_count += 1
     end
 
@@ -240,7 +241,13 @@ class Chef
     # as being "unprocessed".
     #
     def detect_unprocessed_resources
-      # raise "FEEX ME"
+      run_context.resource_collection.all_resources.select { |resource| resource.executed_by_runner == false }.each do |resource|
+        Array(resource.action).each do |action|
+          record = ActionReport.new(resource, action, 0)
+          record.status = :up_to_date
+          updated_resources << record
+        end
+      end
     end
 
     def node_name

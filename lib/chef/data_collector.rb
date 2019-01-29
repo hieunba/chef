@@ -2,7 +2,7 @@
 # Author:: Adam Leff (<adamleff@chef.io>)
 # Author:: Ryan Cragun (<ryan@chef.io>)
 #
-# Copyright:: Copyright 2012-2018, Chef Software Inc.
+# Copyright:: Copyright 2012-2019, Chef Software Inc.
 # License:: Apache License, Version 2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,8 +22,6 @@ require "uri"
 require "chef/server_api"
 require "chef/http/simple_json"
 require "chef/event_dispatch/base"
-require "chef/data_collector/messages"
-require "chef/data_collector/resource_report"
 require "ostruct"
 require "set"
 
@@ -40,7 +38,6 @@ class Chef
     # endpoint.
     class Reporter < EventDispatch::Base
 
-      attr_reader :all_resource_reports
       attr_reader :status
       attr_reader :exception
       attr_reader :error_descriptions
@@ -48,6 +45,7 @@ class Chef
       attr_reader :run_status
       attr_reader :current_resource_report
       attr_reader :deprecations
+      attr_reader :action_collection
 
       # handle to the events object so we can deregister
       # @api private
@@ -55,7 +53,6 @@ class Chef
 
       def initialize(events)
         @events = events
-        @all_resource_reports    = []
         @current_resource_loaded = nil
         @error_descriptions      = {}
         @expanded_run_list       = {}
@@ -98,6 +95,7 @@ class Chef
       end
 
       def action_collection_registration(action_collection)
+        @action_collection = action_collection
         action_collection.register(self) if should_be_enabled?
       end
 
@@ -151,6 +149,16 @@ class Chef
       end
 
       private
+
+      # get only the top level resources and strip out the subcollections
+      def action_records
+        @action_records ||= action_collection.filtered_collection(max_nesting: 0)
+      end
+
+      # strip out everything other than top-level updated resources and count them
+      def updated_resource_count
+        action_collection.filtered_collection(max_nesting: 0, up_to_date: false, skipped: false, unprocessed: false, failed: false).size
+      end
 
       # Selects the type of HTTP client to use based on whether we are using
       # token-based or signed header authentication. Token authentication is
@@ -262,7 +270,7 @@ class Chef
         # we have nothing to report.
         return unless run_status
 
-        message = run_end_message(
+        message = run_end_message( # FIXME: remove all arguments
           run_status: run_status,
           expanded_run_list: expanded_run_list,
           resources: all_resource_reports,
@@ -287,12 +295,63 @@ class Chef
         headers
       end
 
-      def add_resource_report(resource_report)
-        @all_resource_reports << OpenStruct.new(
-          resource: resource_report.new_resource,
-          action: resource_report.action,
-          report_data: resource_report.to_h
-        )
+      # If the identity property has been lazied (via a lazy name resource) evaluating it
+      # for an unprocessed resource (where the preconditions have not been met) may cause the lazy
+      # evaluator to throw -- and would otherwise crash the data collector.
+      #
+      def safe_resource_identity(new_resource)
+        new_resource.identity.to_s
+      rescue => e
+        "unknown identity (due to #{e.class})"
+      end
+
+      def safe_state_for_resource_reporter(resource)
+        resource ? resource.state_for_resource_reporter : {}
+      rescue
+        {}
+      end
+
+      def action_record_status_for_json(action_record)
+        action = action_record.status.to_s
+        action = "up-to-date" if action == "up_to_date"
+        action
+      end
+
+      def updated_or_failed?(action_record)
+        action_record.status == :updated || action_record.status == :failed
+      end
+
+      def action_record_for_json(action_record)
+        new_resource = action_record.new_resource
+        current_resource = action_record.current_resource
+
+        hash = {
+          "type" => new_resource.resource_name.to_sym,
+          "name" => new_resource.name.to_s,
+          "id" => safe_resource_identity(new_resource),
+          "after" => safe_state_for_resource_reporter(new_resource),
+          "before" => safe_state_for_resource_reporter(current_resource),
+          "duration" => new_resource.elapsed_time.nil? ? "" : (new_resource.elapsed_time * 1000).to_i.to_s,
+          "delta" => new_resource.respond_to?(:diff) && updated_or_failed?(action_record) ? new_resource.diff : "",
+          "ignore_failure" => new_resource.ignore_failure,
+          "result" => action_record.action.to_s,
+          "status" => action_record_status_for_json(action_record),
+        }
+
+        if new_resource.cookbook_name
+          hash["cookbook_name"]    = new_resource.cookbook_name
+          hash["cookbook_version"] = new_resource.cookbook_version.version
+          hash["recipe_name"]      = new_resource.recipe_name
+        end
+
+        hash["conditional"] = action_record.conditional.to_text if action_record.status == :skipped
+        hash["error_message"] = action_record.exception.message unless action_record.exception.nil?
+
+        hash
+      end
+
+      def all_resource_reports
+        action_records.map { |rec| action_record_for_json(rec) }
       end
 
       def update_error_description(discription_hash)
@@ -383,16 +442,16 @@ class Chef
       #
       def run_start_message(run_status)
         {
-          "chef_server_fqdn"  => chef_server_fqdn,
-          "entity_uuid"       => node_uuid,
-          "id"                => run_status.run_id,
-          "message_version"   => "1.0.0",
-          "message_type"      => "run_start",
-          "node_name"         => run_status.node.name,
+          "chef_server_fqdn" => chef_server_fqdn,
+          "entity_uuid" => node_uuid,
+          "id" => run_status.run_id,
+          "message_version" => "1.0.0",
+          "message_type" => "run_start",
+          "node_name" => run_status.node.name,
           "organization_name" => organization,
-          "run_id"            => run_status.run_id,
-          "source"            => collector_source,
-          "start_time"        => run_status.start_time.utc.iso8601,
+          "run_id" => run_status.run_id,
+          "source" => collector_source,
+          "start_time" => run_status.start_time.utc.iso8601,
         }
       end
 
@@ -408,34 +467,34 @@ class Chef
         run_status = reporter_data[:run_status]
 
         message = {
-          "chef_server_fqdn"       => chef_server_fqdn,
-          "entity_uuid"            => node_uuid,
-          "expanded_run_list"      => reporter_data[:expanded_run_list],
-          "id"                     => run_status.run_id,
-          "message_version"        => "1.1.0",
-          "message_type"           => "run_converge",
-          "node"                   => run_status.node,
-          "node_name"              => run_status.node.name,
-          "organization_name"      => organization,
-          "resources"              => reporter_data[:resources].map(&:report_data),
-          "run_id"                 => run_status.run_id,
-          "run_list"               => run_status.node.run_list.for_json,
-          "policy_name"            => run_status.node.policy_name,
-          "policy_group"           => run_status.node.policy_group,
-          "start_time"             => run_status.start_time.utc.iso8601,
-          "end_time"               => run_status.end_time.utc.iso8601,
-          "source"                 => collector_source,
-          "status"                 => reporter_data[:status],
-          "total_resource_count"   => reporter_data[:resources].count,
-          "updated_resource_count" => reporter_data[:resources].select { |r| r.report_data["status"] == "updated" }.count,
-          "deprecations"           => reporter_data[:deprecations],
+          "chef_server_fqdn" => chef_server_fqdn,
+          "entity_uuid" => node_uuid,
+          "expanded_run_list" => reporter_data[:expanded_run_list],
+          "id" => run_status.run_id,
+          "message_version" => "1.1.0",
+          "message_type" => "run_converge",
+          "node" => run_status.node,
+          "node_name" => run_status.node.name,
+          "organization_name" => organization,
+          "resources" => reporter_data[:resources],
+          "run_id" => run_status.run_id,
+          "run_list" => run_status.node.run_list.for_json,
+          "policy_name" => run_status.node.policy_name,
+          "policy_group" => run_status.node.policy_group,
+          "start_time" => run_status.start_time.utc.iso8601,
+          "end_time" => run_status.end_time.utc.iso8601,
+          "source" => collector_source,
+          "status" => reporter_data[:status],
+          "total_resource_count" => reporter_data[:resources].count,
+          "updated_resource_count" => updated_resource_count,
+          "deprecations" => reporter_data[:deprecations],
         }
 
         if run_status.exception
           message["error"] = {
-            "class"       => run_status.exception.class,
-            "message"     => run_status.exception.message,
-            "backtrace"   => run_status.exception.backtrace,
+            "class" => run_status.exception.class,
+            "message" => run_status.exception.message,
+            "backtrace" => run_status.exception.backtrace,
             "description" => reporter_data[:error_descriptions],
           }
         end

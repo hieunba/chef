@@ -1,6 +1,6 @@
 #
 # Author:: Adam Jacob (<adam@chef.io>)
-# Copyright:: Copyright 2008-2018, Chef Software Inc.
+# Copyright:: Copyright 2008-2019, Chef Software Inc.
 # License:: Apache License, Version 2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -117,6 +117,7 @@ provider_handler_map ||= nil
 resource_handler_map ||= nil
 
 RSpec.configure do |config|
+  config.tty = true
   config.include(Matchers)
   config.include(MockShellout::RSpec)
   config.filter_run focus: true

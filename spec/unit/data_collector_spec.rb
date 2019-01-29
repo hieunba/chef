@@ -28,7 +28,7 @@ describe Chef::DataCollector do
 
   let(:rest_client) { double("Chef::ServerAPI (mock)") }
 
-  let(:data_collector) { Chef::DataCollector::Reporter.new }
+  let(:data_collector) { Chef::DataCollector::Reporter.new(events) }
 
   let(:new_resource) { Chef::Resource::File.new("/tmp/a-file.txt") }
 
@@ -62,7 +62,7 @@ describe Chef::DataCollector do
 
   let(:exception) { nil }
 
-  #  let(:action_collection) { Chef::ActionCollection.new }
+  let(:action_collection) { Chef::ActionCollection.new }
 
   before do
     allow(Chef::HTTP::SimpleJSON).to receive(:new).and_return(rest_client)
@@ -73,7 +73,7 @@ describe Chef::DataCollector do
     allow(new_resource).to receive(:cookbook_version).and_return(cookbook_version)
     run_list << "recipe[lobster]" << "role[rage]" << "recipe[fist]"
     allow(Time).to receive(:now).and_return(start_time, end_time)
-    # events.register(action_collection)
+    events.register(action_collection)
     events.register(data_collector)
   end
 
@@ -82,7 +82,7 @@ describe Chef::DataCollector do
       nil,
       {
         "chef_server_fqdn" => "localhost",
-        "entity_uuid" => "335990f4-2c7e-47c2-89a5-407d0891463e",
+        "entity_uuid" => "779196c6-f94f-4501-9dae-af8081ab4d3a", # FIXME
         "id" => nil,
         "message_type" => "run_start",
         "message_version" => "1.0.0",
@@ -146,7 +146,7 @@ describe Chef::DataCollector do
     before do
       events.run_list_expanded(expansion)
       run_status.start_clock
-      # events.cookbook_compilation_start(run_context)
+      events.cookbook_compilation_start(run_context)
     end
 
     describe "initialization" do
@@ -209,7 +209,7 @@ describe Chef::DataCollector do
         end
 
         it "has a entity_uuid" do
-          expect_converge_message("entity_uuid" => "335990f4-2c7e-47c2-89a5-407d0891463e") # FIXME
+          expect_converge_message("entity_uuid" => "779196c6-f94f-4501-9dae-af8081ab4d3a") # FIXME
           send_run_failed_or_completed_event
         end
 
@@ -299,6 +299,7 @@ describe Chef::DataCollector do
         end
 
         it "includes the resource record" do
+          pp resource_record
           expect_converge_message("resources" => resource_record)
           send_run_failed_or_completed_event
         end
@@ -393,7 +394,6 @@ describe Chef::DataCollector do
         let(:updated_resource_count) { 0 }
         let(:resource_record) do
           rec = resource_record_for(current_resource, new_resource, :create, "failed")
-          rec["before"] = {} # FIXME: this seems buggy since we have a loaded current_resource
           rec["error_message"] = "imperial to metric conversion error"
           [ rec ]
         end
@@ -420,7 +420,7 @@ describe Chef::DataCollector do
         let(:updated_resource_count) { 0 }
         let(:resource_record) do
           rec = resource_record_for(current_resource, new_resource, :create, "failed")
-          rec["before"] = {} # FIXME: this seems buggy since we have a loaded current_resource
+          rec["before"] = {}
           rec["error_message"] = "imperial to metric conversion error"
           [ rec ]
         end
@@ -440,7 +440,7 @@ describe Chef::DataCollector do
         it_behaves_like "sends a converge message"
       end
 
-      context "when the resource collection contains a resource that was skipped due to prior errors" do
+      context "when the resource collection contains a resource that was unproccesed due to prior errors" do
         let(:exception) { Exception.new("imperial to metric conversion error") }
         let(:error_description) { Chef::Formatters::ErrorMapper.resource_failed(new_resource, :create, exception).for_json }
         let(:total_resource_count) { 2 }
@@ -471,6 +471,7 @@ describe Chef::DataCollector do
           events.resource_current_state_loaded(new_resource, :create, current_resource)
           events.resource_failed(new_resource, :create, exception)
           events.resource_completed(new_resource)
+          new_resource.executed_by_runner = true
           events.converge_failed(exception)
           run_status.stop_clock
           run_status.exception = exception

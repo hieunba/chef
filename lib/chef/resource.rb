@@ -140,6 +140,7 @@ class Chef
       @guard_interpreter = nil
       @default_guard_interpreter = :default
       @elapsed_time = 0
+      @executed_by_runner = false
     end
 
     #
@@ -451,6 +452,11 @@ class Chef
     # action.  Not cumulative.
     #
     attr_reader :elapsed_time
+
+    #
+    # @return [Boolean] If the resource was executed by the runner
+    #
+    attr_accessor :executed_by_runner
 
     #
     # The guard interpreter that will be used to process `only_if` and `not_if`
