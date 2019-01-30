@@ -244,7 +244,7 @@ class Chef
       run_context.resource_collection.all_resources.select { |resource| resource.executed_by_runner == false }.each do |resource|
         Array(resource.action).each do |action|
           record = ActionReport.new(resource, action, 0)
-          record.status = :up_to_date
+          record.status = :unprocessed
           updated_resources << record
         end
       end

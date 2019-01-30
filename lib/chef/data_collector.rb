@@ -331,7 +331,7 @@ class Chef
           "id" => safe_resource_identity(new_resource),
           "after" => safe_state_for_resource_reporter(new_resource),
           "before" => safe_state_for_resource_reporter(current_resource),
-          "duration" => new_resource.elapsed_time.nil? ? "" : (new_resource.elapsed_time * 1000).to_i.to_s,
+          "duration" => action_record.elapsed_time.nil? ? "" : (action_record.elapsed_time * 1000).to_i.to_s,
           "delta" => new_resource.respond_to?(:diff) && updated_or_failed?(action_record) ? new_resource.diff : "",
           "ignore_failure" => new_resource.ignore_failure,
           "result" => action_record.action.to_s,
@@ -495,7 +495,7 @@ class Chef
             "class" => run_status.exception.class,
             "message" => run_status.exception.message,
             "backtrace" => run_status.exception.backtrace,
-            "description" => reporter_data[:error_descriptions],
+            "description" => action_collection.error_descriptions,
           }
         end
 

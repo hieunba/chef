@@ -1190,8 +1190,10 @@ class Chef
     # Internal Resource Interface (for Chef)
     #
 
-    FORBIDDEN_IVARS = [:@run_context, :@logger, :@not_if, :@only_if, :@enclosing_provider, :@description, :@introduced, :@examples, :@validation_message, :@deprecated, :@default_description, :@skip_docs].freeze
-    HIDDEN_IVARS = [:@allowed_actions, :@resource_name, :@source_line, :@run_context, :@logger, :@name, :@not_if, :@only_if, :@elapsed_time, :@enclosing_provider, :@description, :@introduced, :@examples, :@validation_message, :@deprecated, :@default_description, :@skip_docs].freeze
+    # FORBIDDEN_IVARS do not show up when the resource is converted to JSON (ie. hidden from data_collector and sending to the chef server via #to_json/to_h/as_json/inspect)
+    FORBIDDEN_IVARS = [:@run_context, :@logger, :@not_if, :@only_if, :@enclosing_provider, :@description, :@introduced, :@examples, :@validation_message, :@deprecated, :@default_description, :@skip_docs, :@executed_by_runner].freeze
+    # HIDDEN_IVARS do not show up when the resource is displayed to the user as text (ie. in the error inspector output via #to_text)
+    HIDDEN_IVARS = [:@allowed_actions, :@resource_name, :@source_line, :@run_context, :@logger, :@name, :@not_if, :@only_if, :@elapsed_time, :@enclosing_provider, :@description, :@introduced, :@examples, :@validation_message, :@deprecated, :@default_description, :@skip_docs, :@executed_by_runner].freeze
 
     include Chef::Mixin::ConvertToClassName
     extend Chef::Mixin::ConvertToClassName

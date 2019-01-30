@@ -299,7 +299,6 @@ describe Chef::DataCollector do
         end
 
         it "includes the resource record" do
-          pp resource_record
           expect_converge_message("resources" => resource_record)
           send_run_failed_or_completed_event
         end
@@ -332,6 +331,31 @@ describe Chef::DataCollector do
         before do
           events.resource_action_start(new_resource, :create)
           events.resource_current_state_loaded(new_resource, :create, current_resource)
+          events.resource_updated(new_resource, :create)
+          events.resource_completed(new_resource)
+          events.converge_complete
+          run_status.stop_clock
+        end
+
+        it_behaves_like "sends a converge message"
+      end
+
+      context "When there is an embedded resource, it omits reporting the sub-resource" do
+        let(:total_resource_count) { 1 }
+        let(:updated_resource_count) { 1 }
+        let(:resource_record) { [ resource_record_for(current_resource, new_resource, :create, "updated") ] }
+        let(:status) { "success" }
+
+        before do
+          events.resource_action_start(new_resource, :create)
+          events.resource_current_state_loaded(new_resource, :create, current_resource)
+
+          implementation_resource = Chef::Resource::CookbookFile.new("/preseed-file.txt")
+          events.resource_action_start(implementation_resource , :create)
+          events.resource_current_state_loaded(implementation_resource, :create, implementation_resource)
+          events.resource_updated(implementation_resource, :create)
+          events.resource_completed(implementation_resource)
+
           events.resource_updated(new_resource, :create)
           events.resource_completed(new_resource)
           events.converge_complete
@@ -454,7 +478,6 @@ describe Chef::DataCollector do
         end
         let(:resource_record) do
           rec1 = resource_record_for(current_resource, new_resource, :create, "failed")
-          rec1["before"] = {} # FIXME: this seems buggy since we have a loaded current_resource
           rec1["error_message"] = "imperial to metric conversion error"
           rec2 = resource_record_for(nil, unprocessed_resource, :nothing, "unprocessed")
           rec2["before"] = {}
