@@ -24,7 +24,6 @@ require "chef/http/simple_json"
 require "chef/event_dispatch/base"
 require "ostruct"
 require "set"
-require "chef/data_collector/helpers"
 require "chef/data_collector/node_uuid"
 require "chef/data_collector/run_end_message"
 require "chef/data_collector/run_start_message"
@@ -41,7 +40,6 @@ class Chef
     # and exports its data through a webhook-like mechanism to a configured
     # endpoint.
     class Reporter < EventDispatch::Base
-      include Chef::DataCollector::Helpers
 
       attr_reader :status
       attr_reader :exception
@@ -75,13 +73,12 @@ class Chef
 
         # do sanity checks
         validate_data_collector_server_url!
-        validate_data_collector_output_locations! if Chef::Config[:data_collector][:output_locations]
+        validate_data_collector_output_locations!
 
+        # do the run_start_message
         message = Chef::DataCollector::RunStartMessage.run_start_message(self)
-        disable_reporter_on_error do
-          send_to_data_collector(message)
-        end
-        send_to_output_locations(message) if Chef::Config[:data_collector][:output_locations]
+        send_to_data_collector(message)
+        send_to_output_locations(message)
       end
 
       # see EventDispatch::Base#run_completed
@@ -185,10 +182,14 @@ class Chef
       end
 
       def send_to_data_collector(message)
-        http.post(nil, message, headers) if Chef::Config[:data_collector][:server_url]
+        disable_reporter_on_error do
+          http.post(nil, message, headers) if Chef::Config[:data_collector][:server_url]
+        end
       end
 
       def send_to_output_locations(message)
+        return unless Chef::Config[:data_collector][:output_locations]
+
         Chef::Config[:data_collector][:output_locations].each do |type, location_list|
           location_list.each do |l|
             handle_output_location(type, l, message)
@@ -227,10 +228,8 @@ class Chef
         return unless run_status
 
         message = Chef::DataCollector::RunEndMessage.construct_message(self, status)
-        disable_reporter_on_error do
-          send_to_data_collector(message)
-        end
-        send_to_output_locations(message) if Chef::Config[:data_collector][:output_locations]
+        send_to_data_collector(message)
+        send_to_output_locations(message)
       end
 
       def headers
@@ -248,7 +247,9 @@ class Chef
         @deprecations << { message: message, url: url, location: location }
       end
 
-      def validate_and_return_uri(uri)
+      ################### VALIDATION FIXME: extract somehow ################################
+
+      def safe_uri(uri)
         URI(uri)
       rescue URI::InvalidURIError
         nil
@@ -269,7 +270,7 @@ class Chef
 
       def validate_data_collector_server_url!
         unless !Chef::Config[:data_collector][:server_url] && Chef::Config[:data_collector][:output_locations]
-          uri = validate_and_return_uri(Chef::Config[:data_collector][:server_url])
+          uri = safe_uri(Chef::Config[:data_collector][:server_url])
           unless uri
             raise Chef::Exceptions::ConfigurationError, "Chef::Config[:data_collector][:server_url] (#{Chef::Config[:data_collector][:server_url]}) is not a valid URI."
           end
@@ -282,10 +283,12 @@ class Chef
       end
 
       def handle_type(type, loc)
-        type == :urls ? validate_and_return_uri(loc) : validate_and_create_file(loc)
+        type == :urls ? safe_uri(loc) : validate_and_create_file(loc)
       end
 
       def validate_data_collector_output_locations!
+        return unless Chef::Config[:data_collector][:output_locations]
+
         if Chef::Config[:data_collector][:output_locations].empty?
           raise Chef::Exceptions::ConfigurationError,
             "Chef::Config[:data_collector][:output_locations] is empty. Please supply an hash of valid URLs and / or local file paths."
@@ -314,20 +317,20 @@ class Chef
 
         if Chef::Config[:why_run]
           Chef::Log.trace("data collector is disabled for why run mode")
-          false
+          return false
         end
         unless mode == :both || solo && mode == :solo || !solo && mode == :client
           Chef::Log.trace("data collector is configured to only run in " \
                           "#{Chef::Config[:data_collector][:mode].inspect} modes, disabling it")
-          false
+          return false
         end
         unless Chef::Config[:data_collector][:server_url] || Chef::Config[:data_collector][:output_locations]
           Chef::Log.trace("Neither data collector URL or output locations have been configured, disabling data collector")
-          false
+          return false
         end
         if solo && !Chef::Config[:data_collector][:token]
           Chef::Log.trace("Data collector token must be configured to use Chef Automate data collector with Chef Solo")
-          false
+          return false
         end
         if !solo && Chef::Config[:data_collector][:token]
           Chef::Log.warn("Data collector token authentication is not recommended for client-server mode" \

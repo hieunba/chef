@@ -17,7 +17,7 @@
 
 class Chef
   class DataCollector
-    module Helpers
+    module MessageHelpers
       private
 
       #

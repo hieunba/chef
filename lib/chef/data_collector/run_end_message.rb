@@ -15,13 +15,13 @@
 # limitations under the License.
 #
 
-require "chef/data_collector/helpers"
+require "chef/data_collector/message_helpers"
 require "chef/data_collector/node_uuid"
 
 class Chef
   class DataCollector
     module RunEndMessage
-      extend Chef::DataCollector::Helpers
+      extend Chef::DataCollector::MessageHelpers
 
       class << self
         #
