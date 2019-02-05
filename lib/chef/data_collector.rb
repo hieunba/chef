@@ -27,6 +27,7 @@ require "set"
 require "chef/data_collector/helpers"
 require "chef/data_collector/node_uuid"
 require "chef/data_collector/run_end_message"
+require "chef/data_collector/run_start_message"
 
 class Chef
 
@@ -76,7 +77,7 @@ class Chef
         validate_data_collector_server_url!
         validate_data_collector_output_locations! if Chef::Config[:data_collector][:output_locations]
 
-        message = run_start_message(run_status)
+        message = Chef::DataCollector::RunStartMessage.run_start_message(self)
         disable_reporter_on_error do
           send_to_data_collector(message)
         end
@@ -298,29 +299,6 @@ class Chef
             end
           end
         end
-      end
-
-      #
-      # Message payload that is sent to the DataCollector server at the
-      # start of a Chef run.
-      #
-      # @param run_status [Chef::RunStatus] The RunStatus instance for this node/run.
-      #
-      # @return [Hash] A hash containing the run start message data.
-      #
-      def run_start_message(run_status)
-        {
-          "chef_server_fqdn" => chef_server_fqdn,
-          "entity_uuid" => Chef::DataCollector::NodeUUID.node_uuid(run_status.run_context.node),
-          "id" => run_status.run_id,
-          "message_version" => "1.0.0",
-          "message_type" => "run_start",
-          "node_name" => run_status.node.name,
-          "organization_name" => organization,
-          "run_id" => run_status.run_id,
-          "source" => collector_source,
-          "start_time" => run_status.start_time.utc.iso8601,
-        }
       end
 
       # Whether or not to enable data collection:
