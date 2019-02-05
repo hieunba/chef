@@ -24,6 +24,9 @@ require "chef/http/simple_json"
 require "chef/event_dispatch/base"
 require "ostruct"
 require "set"
+require "chef/data_collector/helpers"
+require "chef/data_collector/node_uuid"
+require "chef/data_collector/run_end_message"
 
 class Chef
 
@@ -37,13 +40,12 @@ class Chef
     # and exports its data through a webhook-like mechanism to a configured
     # endpoint.
     class Reporter < EventDispatch::Base
+      include Chef::DataCollector::Helpers
 
       attr_reader :status
       attr_reader :exception
-      attr_reader :error_descriptions
       attr_reader :expanded_run_list
       attr_reader :run_status
-      attr_reader :current_resource_report
       attr_reader :deprecations
       attr_reader :action_collection
 
@@ -53,8 +55,6 @@ class Chef
 
       def initialize(events)
         @events = events
-        @current_resource_loaded = nil
-        @error_descriptions      = {}
         @expanded_run_list       = {}
         @deprecations            = Set.new
       end
@@ -69,11 +69,12 @@ class Chef
       def run_started(current_run_status)
         @run_status = current_run_status
 
+        # publish our node_uuid back to the node data object
+        run_status.run_context.node.automatic[:chef_guid] = Chef::DataCollector::NodeUUID.node_uuid(run_status.run_context.node)
+
         # do sanity checks
         validate_data_collector_server_url!
         validate_data_collector_output_locations! if Chef::Config[:data_collector][:output_locations]
-
-        generate_guid
 
         message = run_start_message(run_status)
         disable_reporter_on_error do
@@ -86,12 +87,12 @@ class Chef
       # Upon receipt, we will send our run completion message to the
       # configured DataCollector endpoint.
       def run_completed(node)
-        send_run_completion(status: "success")
+        send_run_completion("success")
       end
 
       # see EventDispatch::Base#run_failed
       def run_failed(exception)
-        send_run_completion(status: "failure")
+        send_run_completion("failure")
       end
 
       def action_collection_registration(action_collection)
@@ -106,42 +107,6 @@ class Chef
         @expanded_run_list = run_list_expansion
       end
 
-      # see EventDispatch::Base#run_list_expand_failed
-      # The run error text is updated with the output of the appropriate
-      # formatter.
-      def run_list_expand_failed(node, exception)
-        update_error_description(
-          Formatters::ErrorMapper.run_list_expand_failed(
-            node,
-            exception
-          ).for_json
-        )
-      end
-
-      # see EventDispatch::Base#cookbook_resolution_failed
-      # The run error text is updated with the output of the appropriate
-      # formatter.
-      def cookbook_resolution_failed(expanded_run_list, exception)
-        update_error_description(
-          Formatters::ErrorMapper.cookbook_resolution_failed(
-            expanded_run_list,
-            exception
-          ).for_json
-        )
-      end
-
-      # see EventDispatch::Base#cookbook_sync_failed
-      # The run error text is updated with the output of the appropriate
-      # formatter.
-      def cookbook_sync_failed(cookbooks, exception)
-        update_error_description(
-          Formatters::ErrorMapper.cookbook_sync_failed(
-            cookbooks,
-            exception
-          ).for_json
-        )
-      end
-
       # see EventDispatch::Base#deprecation
       # Append a received deprecation to the list of deprecations
       def deprecation(message, location = caller(2..2)[0])
@@ -149,16 +114,6 @@ class Chef
       end
 
       private
-
-      # get only the top level resources and strip out the subcollections
-      def action_records
-        @action_records ||= action_collection.filtered_collection(max_nesting: 0)
-      end
-
-      # strip out everything other than top-level updated resources and count them
-      def updated_resource_count
-        action_collection.filtered_collection(max_nesting: 0, up_to_date: false, skipped: false, unprocessed: false, failed: false).size
-      end
 
       # Selects the type of HTTP client to use based on whether we are using
       # token-based or signed header authentication. Token authentication is
@@ -264,20 +219,13 @@ class Chef
       #
       # @param opts [Hash] Additional details about the run, such as its success/failure.
       #
-      def send_run_completion(opts)
+      def send_run_completion(status)
         # If run_status is nil we probably failed before the client triggered
         # the run_started callback. In this case we'll skip updating because
         # we have nothing to report.
         return unless run_status
 
-        message = run_end_message( # FIXME: remove all arguments
-          run_status: run_status,
-          expanded_run_list: expanded_run_list,
-          resources: all_resource_reports,
-          status: opts[:status],
-          error_descriptions: error_descriptions,
-          deprecations: deprecations.to_a
-        )
+        message = Chef::DataCollector::RunEndMessage.construct_message(self, status)
         disable_reporter_on_error do
           send_to_data_collector(message)
         end
@@ -295,88 +243,8 @@ class Chef
         headers
       end
 
-      # If the identity property has been lazied (via a lazy name resource) evaluating it
-      # for an unprocessed resource (where the preconditions have not been met) may cause the lazy
-      # evaluator to throw -- and would otherwise crash the data collector.
-      #
-      def safe_resource_identity(new_resource)
-        new_resource.identity.to_s
-      rescue => e
-        "unknown identity (due to #{e.class})"
-      end
-
-      def safe_state_for_resource_reporter(resource)
-        resource ? resource.state_for_resource_reporter : {}
-      rescue
-        {}
-      end
-
-      def action_record_status_for_json(action_record)
-        action = action_record.status.to_s
-        action = "up-to-date" if action == "up_to_date"
-        action
-      end
-
-      def updated_or_failed?(action_record)
-        action_record.status == :updated || action_record.status == :failed
-      end
-
-      def action_record_for_json(action_record)
-        new_resource = action_record.new_resource
-        current_resource = action_record.current_resource
-
-        hash = {
-          "type" => new_resource.resource_name.to_sym,
-          "name" => new_resource.name.to_s,
-          "id" => safe_resource_identity(new_resource),
-          "after" => safe_state_for_resource_reporter(new_resource),
-          "before" => safe_state_for_resource_reporter(current_resource),
-          "duration" => action_record.elapsed_time.nil? ? "" : (action_record.elapsed_time * 1000).to_i.to_s,
-          "delta" => new_resource.respond_to?(:diff) && updated_or_failed?(action_record) ? new_resource.diff : "",
-          "ignore_failure" => new_resource.ignore_failure,
-          "result" => action_record.action.to_s,
-          "status" => action_record_status_for_json(action_record),
-        }
-
-        if new_resource.cookbook_name
-          hash["cookbook_name"]    = new_resource.cookbook_name
-          hash["cookbook_version"] = new_resource.cookbook_version.version
-          hash["recipe_name"]      = new_resource.recipe_name
-        end
-
-        hash["conditional"] = action_record.conditional.to_text if action_record.status == :skipped
-        hash["error_message"] = action_record.exception.message unless action_record.exception.nil?
-
-        hash
-      end
-
-      def all_resource_reports
-        action_records.map { |rec| action_record_for_json(rec) }
-      end
-
-      def update_error_description(discription_hash)
-        @error_descriptions = discription_hash
-      end
-
       def add_deprecation(message, url, location)
         @deprecations << { message: message, url: url, location: location }
-      end
-
-      def initialize_resource_report_if_needed(new_resource, action, current_resource = nil)
-        return unless current_resource_report.nil?
-        @current_resource_report = create_resource_report(new_resource, action, current_resource)
-      end
-
-      def create_resource_report(new_resource, action, current_resource = nil)
-        Chef::DataCollector::ResourceReport.new(
-          new_resource,
-          action,
-          current_resource
-        )
-      end
-
-      def clear_current_resource_report
-        @current_resource_report = nil
       end
 
       def validate_and_return_uri(uri)
@@ -443,7 +311,7 @@ class Chef
       def run_start_message(run_status)
         {
           "chef_server_fqdn" => chef_server_fqdn,
-          "entity_uuid" => node_uuid,
+          "entity_uuid" => Chef::DataCollector::NodeUUID.node_uuid(run_status.run_context.node),
           "id" => run_status.run_id,
           "message_version" => "1.0.0",
           "message_type" => "run_start",
@@ -453,200 +321,6 @@ class Chef
           "source" => collector_source,
           "start_time" => run_status.start_time.utc.iso8601,
         }
-      end
-
-      #
-      # Message payload that is sent to the DataCollector server at the
-      # end of a Chef run.
-      #
-      # @param reporter_data [Hash] Data supplied by the Reporter, such as run_status, resource counts, etc.
-      #
-      # @return [Hash] A hash containing the run end message data.
-      #
-      def run_end_message(reporter_data)
-        run_status = reporter_data[:run_status]
-
-        message = {
-          "chef_server_fqdn" => chef_server_fqdn,
-          "entity_uuid" => node_uuid,
-          "expanded_run_list" => reporter_data[:expanded_run_list],
-          "id" => run_status.run_id,
-          "message_version" => "1.1.0",
-          "message_type" => "run_converge",
-          "node" => run_status.node,
-          "node_name" => run_status.node.name,
-          "organization_name" => organization,
-          "resources" => reporter_data[:resources],
-          "run_id" => run_status.run_id,
-          "run_list" => run_status.node.run_list.for_json,
-          "policy_name" => run_status.node.policy_name,
-          "policy_group" => run_status.node.policy_group,
-          "start_time" => run_status.start_time.utc.iso8601,
-          "end_time" => run_status.end_time.utc.iso8601,
-          "source" => collector_source,
-          "status" => reporter_data[:status],
-          "total_resource_count" => reporter_data[:resources].count,
-          "updated_resource_count" => updated_resource_count,
-          "deprecations" => reporter_data[:deprecations],
-        }
-
-        if run_status.exception
-          message["error"] = {
-            "class" => run_status.exception.class,
-            "message" => run_status.exception.message,
-            "backtrace" => run_status.exception.backtrace,
-            "description" => action_collection.error_descriptions,
-          }
-        end
-
-        message
-      end
-
-      #
-      # Fully-qualified domain name of the Chef Server configured in Chef::Config
-      # If the chef_server_url cannot be parsed as a URI, the node["fqdn"] attribute
-      # will be returned, or "localhost" if the run_status is unavailable to us.
-      #
-      # @return [String] FQDN of the configured Chef Server, or node/localhost if not found.
-      #
-      def chef_server_fqdn
-        if !Chef::Config[:chef_server_url].nil?
-          URI(Chef::Config[:chef_server_url]).host
-        elsif !Chef::Config[:node_name].nil?
-          Chef::Config[:node_name]
-        else
-          "localhost"
-        end
-      end
-
-      #
-      # The organization name the node is associated with. For Chef Solo runs, a
-      # user-configured organization string is returned, or the string "chef_solo"
-      # if such a string is not configured.
-      #
-      # @return [String] Organization to which the node is associated
-      #
-      def organization
-        solo_run? ? data_collector_organization : chef_server_organization
-      end
-
-      #
-      # Returns the user-configured organization, or "chef_solo" if none is configured.
-      #
-      # This is only used when Chef is run in Solo mode.
-      #
-      # @return [String] Data-collector-specific organization used when running in Chef Solo
-      #
-      def data_collector_organization
-        Chef::Config[:data_collector][:organization] || "chef_solo"
-      end
-
-      #
-      # Return the organization assumed by the configured chef_server_url.
-      #
-      # We must parse this from the Chef::Config[:chef_server_url] because a node
-      # has no knowledge of an organization or to which organization is belongs.
-      #
-      # If we cannot determine the organization, we return "unknown_organization"
-      #
-      # @return [String] shortname of the Chef Server organization
-      #
-      def chef_server_organization
-        return "unknown_organization" unless Chef::Config[:chef_server_url]
-
-        Chef::Config[:chef_server_url].match(%r{/+organizations/+([a-z0-9][a-z0-9_-]{0,254})}).nil? ? "unknown_organization" : $1
-      end
-
-      #
-      # The source of the data collecting during this run, used by the
-      # DataCollector endpoint to determine if Chef was in Solo mode or not.
-      #
-      # @return [String] "chef_solo" if in Solo mode, "chef_client" if in Client mode
-      #
-      def collector_source
-        solo_run? ? "chef_solo" : "chef_client"
-      end
-
-      #
-      # If we're running in Solo (legacy) mode, or in Solo (formerly
-      # "Chef Client Local Mode"), we're considered to be in a "solo run".
-      #
-      # @return [Boolean] Whether we're in a solo run or not
-      #
-      def solo_run?
-        Chef::Config[:solo] || Chef::Config[:local_mode]
-      end
-
-      #
-      # Returns a UUID that uniquely identifies this node for reporting reasons.
-      #
-      # The node is read in from disk if it exists, or it's generated if it does
-      # does not exist.
-      #
-      # @return [String] UUID for the node
-      #
-      def node_uuid
-        Chef::Config[:chef_guid] || read_node_uuid || generate_node_uuid
-      end
-
-      #
-      # Generates a UUID for the node via SecureRandom.uuid and writes out
-      # metadata file so the UUID persists between runs.
-      #
-      # @return [String] UUID for the node
-      #
-      def generate_node_uuid
-        uuid = SecureRandom.uuid
-        update_metadata("node_uuid", uuid)
-
-        uuid
-      end
-
-      #
-      # Reads in the node UUID from the node metadata file
-      #
-      # @return [String] UUID for the node
-      #
-      def read_node_uuid
-        metadata["node_uuid"]
-      end
-
-      METADATA_FILENAME = "data_collector_metadata.json".freeze
-
-      #
-      # Returns the DataCollector metadata for this node
-      #
-      # If the metadata file does not exist in the file cache path,
-      # an empty hash will be returned.
-      #
-      # @return [Hash] DataCollector metadata for this node
-      #
-      def metadata
-        Chef::JSONCompat.parse(Chef::FileCache.load(METADATA_FILENAME))
-      rescue Chef::Exceptions::FileNotFound
-        {}
-      end
-
-      def update_metadata(key, value)
-        updated_metadata = metadata.tap { |x| x[key] = value }
-        Chef::FileCache.store(METADATA_FILENAME, Chef::JSONCompat.to_json(updated_metadata), 0644)
-      end
-
-      # Ensure that we have a GUID for this node
-      # If we've got the proper configuration, we'll simply set that.
-      # If we're registed with the data collector, we'll migrate that UUID into our configuration and use that
-      # Otherwise, we'll create a new GUID and save it
-      def generate_guid
-        Chef::Config[:chef_guid] ||=
-          if File.exists?(Chef::Config[:chef_guid_path])
-            File.read(Chef::Config[:chef_guid_path])
-          else
-            uuid = UUIDFetcher.node_uuid
-            File.open(Chef::Config[:chef_guid_path], "w+") do |fh|
-              fh.write(uuid)
-            end
-            uuid
-          end
       end
 
       # Whether or not to enable data collection:

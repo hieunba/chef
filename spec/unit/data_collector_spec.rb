@@ -163,6 +163,7 @@ describe Chef::DataCollector do
 
     describe "run_start_message" do
       it "does it" do
+        run_status.run_context = run_context
         expect_start_message
         events.run_started(run_status)
       end
@@ -183,6 +184,7 @@ describe Chef::DataCollector do
 
     describe "converge messages" do
       before do
+        run_status.run_context = run_context
         expect_start_message
         events.run_started(run_status)
         events.converge_start(run_context)
